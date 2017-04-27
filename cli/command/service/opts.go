@@ -311,22 +311,24 @@ type serviceOptions struct {
 	name            string
 	labels          opts.ListOpts
 	containerLabels opts.ListOpts
-	image           string
-	args            []string
-	hostname        string
-	env             opts.ListOpts
-	envFile         opts.ListOpts
-	workdir         string
-	user            string
-	groups          opts.ListOpts
-	stopSignal      string
-	tty             bool
-	readOnly        bool
-	mounts          opts.MountOpt
-	dns             opts.ListOpts
-	dnsSearch       opts.ListOpts
-	dnsOption       opts.ListOpts
-	hosts           opts.ListOpts
+	//mychanges to support device
+	devices    opts.ListOpts
+	image      string
+	args       []string
+	hostname   string
+	env        opts.ListOpts
+	envFile    opts.ListOpts
+	workdir    string
+	user       string
+	groups     opts.ListOpts
+	stopSignal string
+	tty        bool
+	readOnly   bool
+	mounts     opts.MountOpt
+	dns        opts.ListOpts
+	dnsSearch  opts.ListOpts
+	dnsOption  opts.ListOpts
+	hosts      opts.ListOpts
 
 	resources resourceOptions
 	stopGrace DurationOpt
