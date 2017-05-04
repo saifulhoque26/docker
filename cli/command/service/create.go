@@ -31,6 +31,9 @@ func newCreateCommand(dockerCli *command.DockerCli) *cobra.Command {
 
 	addServiceFlags(cmd, opts)
 
+	//my changes to add support for device
+	//flags.VarP(&opts.devices, flagDevice, "d", "Service Devices")
+
 	flags.VarP(&opts.labels, flagLabel, "l", "Service labels")
 	flags.Var(&opts.containerLabels, flagContainerLabel, "Container labels")
 	flags.VarP(&opts.env, flagEnv, "e", "Set environment variables")

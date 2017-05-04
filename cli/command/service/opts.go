@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -312,6 +313,7 @@ type serviceOptions struct {
 	labels          opts.ListOpts
 	containerLabels opts.ListOpts
 	//mychanges to support device
+	//devices    []string
 	devices    opts.ListOpts
 	image      string
 	args       []string
@@ -352,9 +354,76 @@ type serviceOptions struct {
 	secrets     opts.SecretOpt
 }
 
+//my changes are here in device in newServiceOptions and also function validateDevice
+func validatePath(val string, validator func(string) bool) (string, error) {
+	var containerPath string
+	var mode string
+
+	if strings.Count(val, ":") > 2 {
+		return val, fmt.Errorf("bad format for path: %s", val)
+	}
+
+	split := strings.SplitN(val, ":", 3)
+	if split[0] == "" {
+		return val, fmt.Errorf("bad format for path: %s", val)
+	}
+	switch len(split) {
+	case 1:
+		containerPath = split[0]
+		val = path.Clean(containerPath)
+	case 2:
+		if isValid := validator(split[1]); isValid {
+			containerPath = split[0]
+			mode = split[1]
+			val = fmt.Sprintf("%s:%s", path.Clean(containerPath), mode)
+		} else {
+			containerPath = split[1]
+			val = fmt.Sprintf("%s:%s", split[0], path.Clean(containerPath))
+		}
+	case 3:
+		containerPath = split[1]
+		mode = split[2]
+		if isValid := validator(split[2]); !isValid {
+			return val, fmt.Errorf("bad mode specified: %s", mode)
+		}
+		val = fmt.Sprintf("%s:%s:%s", split[0], containerPath, mode)
+	}
+
+	if !path.IsAbs(containerPath) {
+		return val, fmt.Errorf("%s is not an absolute path", containerPath)
+	}
+	return val, nil
+}
+
+// validDeviceMode checks if the mode for device is valid or not.
+// Valid mode is a composition of r (read), w (write), and m (mknod).
+func validDeviceMode(mode string) bool {
+	var legalDeviceMode = map[rune]bool{
+		'r': true,
+		'w': true,
+		'm': true,
+	}
+	if mode == "" {
+		return false
+	}
+	for _, c := range mode {
+		if !legalDeviceMode[c] {
+			return false
+		}
+		legalDeviceMode[c] = false
+	}
+	return true
+}
+
+func validateDevice(val string) (string, error) {
+	return validatePath(val, validDeviceMode)
+}
+
 func newServiceOptions() *serviceOptions {
 	return &serviceOptions{
-		labels:          opts.NewListOpts(opts.ValidateEnv),
+		labels: opts.NewListOpts(opts.ValidateEnv),
+
+		devices:         opts.NewListOpts(validateDevice),
 		constraints:     opts.NewListOpts(nil),
 		containerLabels: opts.NewListOpts(opts.ValidateEnv),
 		env:             opts.NewListOpts(opts.ValidateEnv),
@@ -420,6 +489,16 @@ func (opts *serviceOptions) ToService() (swarm.ServiceSpec, error) {
 		return service, err
 	}
 
+	// parse device mappings
+	deviceMappings := []swarm.DeviceMapping{}
+	for _, device := range opts.devices.GetAll() {
+		deviceMapping, err := parseDevice(device)
+		if err != nil {
+			return service, err //changed to return type of this function
+		}
+		deviceMappings = append(deviceMappings, deviceMapping)
+	}
+
 	service = swarm.ServiceSpec{
 		Annotations: swarm.Annotations{
 			Name:   opts.name,
@@ -427,9 +506,11 @@ func (opts *serviceOptions) ToService() (swarm.ServiceSpec, error) {
 		},
 		TaskTemplate: swarm.TaskSpec{
 			ContainerSpec: swarm.ContainerSpec{
-				Image:      opts.image,
-				Args:       opts.args,
-				Env:        currentEnv,
+				Image: opts.image,
+				Args:  opts.args,
+				Env:   currentEnv,
+				//mychanges to support devices
+				Devices:    deviceMappings,
 				Hostname:   opts.hostname,
 				Labels:     runconfigopts.ConvertKVStringsToMap(opts.containerLabels.GetAll()),
 				Dir:        opts.workdir,
@@ -468,6 +549,41 @@ func (opts *serviceOptions) ToService() (swarm.ServiceSpec, error) {
 	return service, nil
 }
 
+// parseDevice parses a device mapping string to a container.DeviceMapping struct
+func parseDevice(device string) (swarm.DeviceMapping, error) {
+	src := ""
+	dst := ""
+	permissions := "rwm"
+	arr := strings.Split(device, ":")
+	switch len(arr) {
+	case 3:
+		permissions = arr[2]
+		fallthrough
+	case 2:
+		if validDeviceMode(arr[1]) {
+			permissions = arr[1]
+		} else {
+			dst = arr[1]
+		}
+		fallthrough
+	case 1:
+		src = arr[0]
+	default:
+		return swarm.DeviceMapping{}, fmt.Errorf("invalid device specification: %s", device)
+	}
+
+	if dst == "" {
+		dst = src
+	}
+
+	deviceMapping := swarm.DeviceMapping{
+		PathOnHost:        src,
+		PathInContainer:   dst,
+		CgroupPermissions: permissions,
+	}
+	return deviceMapping, nil
+}
+
 // addServiceFlags adds all flags that are common to both `create` and `update`.
 // Any flags that are not common are added separately in the individual command
 func addServiceFlags(cmd *cobra.Command, opts *serviceOptions) {
@@ -486,6 +602,8 @@ func addServiceFlags(cmd *cobra.Command, opts *serviceOptions) {
 
 	flags.Var(&opts.replicas, flagReplicas, "Number of tasks")
 
+	////mychanges to support device
+	flags.Var(&opts.devices, flagDevice, "Add a host device to the container")
 	flags.StringVar(&opts.restartPolicy.condition, flagRestartCondition, "", `Restart when condition is met ("none"|"on-failure"|"any")`)
 	flags.Var(&opts.restartPolicy.delay, flagRestartDelay, "Delay between restart attempts (ns|us|ms|s|m|h)")
 	flags.Var(&opts.restartPolicy.maxAttempts, flagRestartMaxAttempts, "Maximum number of restarts before giving up")
@@ -539,15 +657,17 @@ func addServiceFlags(cmd *cobra.Command, opts *serviceOptions) {
 }
 
 const (
-	flagPlacementPref           = "placement-pref"
-	flagPlacementPrefAdd        = "placement-pref-add"
-	flagPlacementPrefRemove     = "placement-pref-rm"
-	flagConstraint              = "constraint"
-	flagConstraintRemove        = "constraint-rm"
-	flagConstraintAdd           = "constraint-add"
-	flagContainerLabel          = "container-label"
-	flagContainerLabelRemove    = "container-label-rm"
-	flagContainerLabelAdd       = "container-label-add"
+	flagPlacementPref        = "placement-pref"
+	flagPlacementPrefAdd     = "placement-pref-add"
+	flagPlacementPrefRemove  = "placement-pref-rm"
+	flagConstraint           = "constraint"
+	flagConstraintRemove     = "constraint-rm"
+	flagConstraintAdd        = "constraint-add"
+	flagContainerLabel       = "container-label"
+	flagContainerLabelRemove = "container-label-rm"
+	flagContainerLabelAdd    = "container-label-add"
+	//my changes
+	flagDevice                  = "device-add"
 	flagDNS                     = "dns"
 	flagDNSRemove               = "dns-rm"
 	flagDNSAdd                  = "dns-add"

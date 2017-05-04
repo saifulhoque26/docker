@@ -21,10 +21,19 @@ type DNSConfig struct {
 	Options []string `json:",omitempty"`
 }
 
+//my changes to support device
+type DeviceMapping struct {
+	PathOnHost        string
+	PathInContainer   string
+	CgroupPermissions string
+}
+
+//my changes to support device
 // ContainerSpec represents the spec of a container.
 type ContainerSpec struct {
 	Image           string                  `json:",omitempty"`
 	Labels          map[string]string       `json:",omitempty"`
+	Devices         []DeviceMapping         `json:",omitempty"`
 	Command         []string                `json:",omitempty"`
 	Args            []string                `json:",omitempty"`
 	Hostname        string                  `json:",omitempty"`
