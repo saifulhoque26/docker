@@ -21,7 +21,6 @@ type DNSConfig struct {
 	Options []string `json:",omitempty"`
 }
 
-<<<<<<< HEAD
 //my changes to support device
 type DeviceMapping struct {
 	PathOnHost        string
@@ -30,7 +29,7 @@ type DeviceMapping struct {
 }
 
 //my changes to support device
-=======
+
 // SELinuxContext contains the SELinux labels of the container.
 type SELinuxContext struct {
 	Disable bool
@@ -53,7 +52,6 @@ type Privileges struct {
 	SELinuxContext *SELinuxContext
 }
 
->>>>>>> 118d4ee1230119c1e0be4b9946593916d85ca386
 // ContainerSpec represents the spec of a container.
 type ContainerSpec struct {
 	Image           string                  `json:",omitempty"`

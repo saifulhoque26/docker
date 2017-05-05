@@ -2,11 +2,11 @@ package service
 
 import (
 	"fmt"
-<<<<<<< HEAD
+
 	"path"
-=======
+
 	"sort"
->>>>>>> 118d4ee1230119c1e0be4b9946593916d85ca386
+
 	"strconv"
 	"strings"
 	"time"
@@ -513,46 +513,29 @@ type serviceOptions struct {
 	name            string
 	labels          opts.ListOpts
 	containerLabels opts.ListOpts
-<<<<<<< HEAD
+
 	//mychanges to support device
 	//devices    []string
-	devices    opts.ListOpts
-	image      string
-	args       []string
-	hostname   string
-	env        opts.ListOpts
-	envFile    opts.ListOpts
-	workdir    string
-	user       string
-	groups     opts.ListOpts
-	stopSignal string
-	tty        bool
-	readOnly   bool
-	mounts     opts.MountOpt
-	dns        opts.ListOpts
-	dnsSearch  opts.ListOpts
-	dnsOption  opts.ListOpts
-	hosts      opts.ListOpts
-=======
-	image           string
-	entrypoint      ShlexOpt
-	args            []string
-	hostname        string
-	env             opts.ListOpts
-	envFile         opts.ListOpts
-	workdir         string
-	user            string
-	groups          opts.ListOpts
-	credentialSpec  credentialSpecOpt
-	stopSignal      string
-	tty             bool
-	readOnly        bool
-	mounts          opts.MountOpt
-	dns             opts.ListOpts
-	dnsSearch       opts.ListOpts
-	dnsOption       opts.ListOpts
-	hosts           opts.ListOpts
->>>>>>> 118d4ee1230119c1e0be4b9946593916d85ca386
+	devices opts.ListOpts
+
+	image          string
+	entrypoint     ShlexOpt
+	args           []string
+	hostname       string
+	env            opts.ListOpts
+	envFile        opts.ListOpts
+	workdir        string
+	user           string
+	groups         opts.ListOpts
+	credentialSpec credentialSpecOpt
+	stopSignal     string
+	tty            bool
+	readOnly       bool
+	mounts         opts.MountOpt
+	dns            opts.ListOpts
+	dnsSearch      opts.ListOpts
+	dnsOption      opts.ListOpts
+	hosts          opts.ListOpts
 
 	resources resourceOptions
 	stopGrace DurationOpt
@@ -718,7 +701,6 @@ func (opts *serviceOptions) ToService(ctx context.Context, apiClient client.APIC
 		return service, err
 	}
 
-<<<<<<< HEAD
 	// parse device mappings
 	deviceMappings := []swarm.DeviceMapping{}
 	for _, device := range opts.devices.GetAll() {
@@ -727,11 +709,12 @@ func (opts *serviceOptions) ToService(ctx context.Context, apiClient client.APIC
 			return service, err //changed to return type of this function
 		}
 		deviceMappings = append(deviceMappings, deviceMapping)
-=======
+	}
+
 	networks, err := convertNetworks(ctx, apiClient, opts.networks.GetAll())
 	if err != nil {
 		return service, err
->>>>>>> 118d4ee1230119c1e0be4b9946593916d85ca386
+
 	}
 
 	service = swarm.ServiceSpec{
@@ -741,18 +724,14 @@ func (opts *serviceOptions) ToService(ctx context.Context, apiClient client.APIC
 		},
 		TaskTemplate: swarm.TaskSpec{
 			ContainerSpec: swarm.ContainerSpec{
-<<<<<<< HEAD
-				Image: opts.image,
-				Args:  opts.args,
-				Env:   currentEnv,
+
+				Image:   opts.image,
+				Args:    opts.args,
+				Command: opts.entrypoint.Value(),
+				Env:     currentEnv,
 				//mychanges to support devices
-				Devices:    deviceMappings,
-=======
-				Image:      opts.image,
-				Args:       opts.args,
-				Command:    opts.entrypoint.Value(),
-				Env:        currentEnv,
->>>>>>> 118d4ee1230119c1e0be4b9946593916d85ca386
+				Devices: deviceMappings,
+
 				Hostname:   opts.hostname,
 				Labels:     runconfigopts.ConvertKVStringsToMap(opts.containerLabels.GetAll()),
 				Dir:        opts.workdir,
@@ -796,7 +775,6 @@ func (opts *serviceOptions) ToService(ctx context.Context, apiClient client.APIC
 	return service, nil
 }
 
-<<<<<<< HEAD
 // parseDevice parses a device mapping string to a container.DeviceMapping struct
 func parseDevice(device string) (swarm.DeviceMapping, error) {
 	src := ""
@@ -830,7 +808,8 @@ func parseDevice(device string) (swarm.DeviceMapping, error) {
 		CgroupPermissions: permissions,
 	}
 	return deviceMapping, nil
-=======
+}
+
 type flagDefaults map[string]interface{}
 
 func (fd flagDefaults) getUint64(flagName string) uint64 {
@@ -880,7 +859,7 @@ func buildServiceDefaultFlagMapping() flagDefaults {
 	defaultFlagValues[flagEndpointMode] = "vip"
 
 	return defaultFlagValues
->>>>>>> 118d4ee1230119c1e0be4b9946593916d85ca386
+
 }
 
 // addServiceFlags adds all flags that are common to both `create` and `update`.
@@ -912,18 +891,11 @@ func addServiceFlags(flags *pflag.FlagSet, opts *serviceOptions, defaultFlagValu
 	flags.Var(&opts.stopGrace, flagStopGracePeriod, flagDesc(flagStopGracePeriod, "Time to wait before force killing a container (ns|us|ms|s|m|h)"))
 	flags.Var(&opts.replicas, flagReplicas, "Number of tasks")
 
-<<<<<<< HEAD
 	////mychanges to support device
 	flags.Var(&opts.devices, flagDevice, "Add a host device to the container")
-	flags.StringVar(&opts.restartPolicy.condition, flagRestartCondition, "", `Restart when condition is met ("none"|"on-failure"|"any")`)
-	flags.Var(&opts.restartPolicy.delay, flagRestartDelay, "Delay between restart attempts (ns|us|ms|s|m|h)")
-	flags.Var(&opts.restartPolicy.maxAttempts, flagRestartMaxAttempts, "Maximum number of restarts before giving up")
-	flags.Var(&opts.restartPolicy.window, flagRestartWindow, "Window used to evaluate the restart policy (ns|us|ms|s|m|h)")
-=======
 	flags.StringVar(&opts.restartPolicy.condition, flagRestartCondition, "", flagDesc(flagRestartCondition, `Restart when condition is met ("none"|"on-failure"|"any")`))
 	flags.Var(&opts.restartPolicy.delay, flagRestartDelay, flagDesc(flagRestartDelay, "Delay between restart attempts (ns|us|ms|s|m|h)"))
 	flags.Var(&opts.restartPolicy.maxAttempts, flagRestartMaxAttempts, flagDesc(flagRestartMaxAttempts, "Maximum number of restarts before giving up"))
->>>>>>> 118d4ee1230119c1e0be4b9946593916d85ca386
 
 	flags.Var(&opts.restartPolicy.window, flagRestartWindow, flagDesc(flagRestartWindow, "Window used to evaluate the restart policy (ns|us|ms|s|m|h)"))
 
@@ -981,7 +953,10 @@ func addServiceFlags(flags *pflag.FlagSet, opts *serviceOptions, defaultFlagValu
 }
 
 const (
-<<<<<<< HEAD
+
+	//my changes
+	flagDevice               = "device-add"
+	flagCredentialSpec       = "credential-spec"
 	flagPlacementPref        = "placement-pref"
 	flagPlacementPrefAdd     = "placement-pref-add"
 	flagPlacementPrefRemove  = "placement-pref-rm"
@@ -991,20 +966,7 @@ const (
 	flagContainerLabel       = "container-label"
 	flagContainerLabelRemove = "container-label-rm"
 	flagContainerLabelAdd    = "container-label-add"
-	//my changes
-	flagDevice                  = "device-add"
-=======
-	flagCredentialSpec          = "credential-spec"
-	flagPlacementPref           = "placement-pref"
-	flagPlacementPrefAdd        = "placement-pref-add"
-	flagPlacementPrefRemove     = "placement-pref-rm"
-	flagConstraint              = "constraint"
-	flagConstraintRemove        = "constraint-rm"
-	flagConstraintAdd           = "constraint-add"
-	flagContainerLabel          = "container-label"
-	flagContainerLabelRemove    = "container-label-rm"
-	flagContainerLabelAdd       = "container-label-add"
->>>>>>> 118d4ee1230119c1e0be4b9946593916d85ca386
+
 	flagDNS                     = "dns"
 	flagDNSRemove               = "dns-rm"
 	flagDNSAdd                  = "dns-add"
