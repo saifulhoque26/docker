@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/docker/distribution/reference"
@@ -27,7 +28,6 @@ import (
 // the repo and tag arguments, respectively.
 func (daemon *Daemon) ImportImage(src string, repository, tag string, msg string, inConfig io.ReadCloser, outStream io.Writer, changes []string) error {
 	var (
-		sf     = streamformatter.NewJSONStreamFormatter()
 		rc     io.ReadCloser
 		resp   *http.Response
 		newRef reference.Named
@@ -59,21 +59,20 @@ func (daemon *Daemon) ImportImage(src string, repository, tag string, msg string
 		rc = inConfig
 	} else {
 		inConfig.Close()
+		if len(strings.Split(src, "://")) == 1 {
+			src = "http://" + src
+		}
 		u, err := url.Parse(src)
 		if err != nil {
 			return err
 		}
-		if u.Scheme == "" {
-			u.Scheme = "http"
-			u.Host = src
-			u.Path = ""
-		}
-		outStream.Write(sf.FormatStatus("", "Downloading from %s", u))
+
 		resp, err = httputils.Download(u.String())
 		if err != nil {
 			return err
 		}
-		progressOutput := sf.NewProgressOutput(outStream, true)
+		outStream.Write(streamformatter.FormatStatus("", "Downloading from %s", u))
+		progressOutput := streamformatter.NewJSONProgressOutput(outStream, true)
 		rc = progress.NewProgressReader(resp.Body, progressOutput, resp.ContentLength, "", "Importing")
 	}
 
@@ -129,6 +128,6 @@ func (daemon *Daemon) ImportImage(src string, repository, tag string, msg string
 	}
 
 	daemon.LogImageEvent(id.String(), id.String(), "import")
-	outStream.Write(sf.FormatStatus("", id.String()))
+	outStream.Write(streamformatter.FormatStatus("", id.String()))
 	return nil
 }

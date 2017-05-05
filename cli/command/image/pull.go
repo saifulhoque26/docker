@@ -1,17 +1,16 @@
 package image
 
 import (
-	"errors"
 	"fmt"
 	"strings"
-
-	"golang.org/x/net/context"
 
 	"github.com/docker/distribution/reference"
 	"github.com/docker/docker/cli"
 	"github.com/docker/docker/cli/command"
 	"github.com/docker/docker/registry"
+	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
+	"golang.org/x/net/context"
 )
 
 type pullOptions struct {
@@ -20,7 +19,7 @@ type pullOptions struct {
 }
 
 // NewPullCommand creates a new `docker pull` command
-func NewPullCommand(dockerCli *command.DockerCli) *cobra.Command {
+func NewPullCommand(dockerCli command.Cli) *cobra.Command {
 	var opts pullOptions
 
 	cmd := &cobra.Command{
@@ -41,7 +40,7 @@ func NewPullCommand(dockerCli *command.DockerCli) *cobra.Command {
 	return cmd
 }
 
-func runPull(dockerCli *command.DockerCli, opts pullOptions) error {
+func runPull(dockerCli command.Cli, opts pullOptions) error {
 	distributionRef, err := reference.ParseNormalizedNamed(opts.remote)
 	if err != nil {
 		return err

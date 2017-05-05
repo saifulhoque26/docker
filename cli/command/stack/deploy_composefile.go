@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -15,11 +16,12 @@ import (
 	composetypes "github.com/docker/docker/cli/compose/types"
 	apiclient "github.com/docker/docker/client"
 	dockerclient "github.com/docker/docker/client"
+	"github.com/pkg/errors"
 	"golang.org/x/net/context"
 )
 
 func deployCompose(ctx context.Context, dockerCli *command.DockerCli, opts deployOptions) error {
-	configDetails, err := getConfigDetails(opts)
+	configDetails, err := getConfigDetails(opts.composefile)
 	if err != nil {
 		return err
 	}
@@ -27,7 +29,7 @@ func deployCompose(ctx context.Context, dockerCli *command.DockerCli, opts deplo
 	config, err := loader.Load(configDetails)
 	if err != nil {
 		if fpe, ok := err.(*loader.ForbiddenPropertiesError); ok {
-			return fmt.Errorf("Compose file contains unsupported options:\n\n%s\n",
+			return errors.Errorf("Compose file contains unsupported options:\n\n%s\n",
 				propertyWarnings(fpe.Properties))
 		}
 
@@ -52,8 +54,15 @@ func deployCompose(ctx context.Context, dockerCli *command.DockerCli, opts deplo
 
 	namespace := convert.NewNamespace(opts.namespace)
 
-	serviceNetworks := getServicesDeclaredNetworks(config.Services)
+	if opts.prune {
+		services := map[string]struct{}{}
+		for _, service := range config.Services {
+			services[service.Name] = struct{}{}
+		}
+		pruneServices(ctx, dockerCli, namespace, services)
+	}
 
+	serviceNetworks := getServicesDeclaredNetworks(config.Services)
 	networks, externalNetworks := convert.Networks(namespace, config.Networks, serviceNetworks)
 	if err := validateExternalNetworks(ctx, dockerCli, externalNetworks); err != nil {
 		return err
@@ -100,22 +109,39 @@ func propertyWarnings(properties map[string]string) string {
 	return strings.Join(msgs, "\n\n")
 }
 
-func getConfigDetails(opts deployOptions) (composetypes.ConfigDetails, error) {
+func getConfigDetails(composefile string) (composetypes.ConfigDetails, error) {
 	var details composetypes.ConfigDetails
-	var err error
 
-	details.WorkingDir, err = os.Getwd()
+	absPath, err := filepath.Abs(composefile)
 	if err != nil {
 		return details, err
 	}
+	details.WorkingDir = filepath.Dir(absPath)
 
-	configFile, err := getConfigFile(opts.composefile)
+	configFile, err := getConfigFile(composefile)
 	if err != nil {
 		return details, err
 	}
 	// TODO: support multiple files
 	details.ConfigFiles = []composetypes.ConfigFile{*configFile}
+	details.Environment, err = buildEnvironment(os.Environ())
+	if err != nil {
+		return details, err
+	}
 	return details, nil
+}
+
+func buildEnvironment(env []string) (map[string]string, error) {
+	result := make(map[string]string, len(env))
+	for _, s := range env {
+		// if value is empty, s is like "K=", not "K".
+		if !strings.Contains(s, "=") {
+			return result, errors.Errorf("unexpected environment %q", s)
+		}
+		kv := strings.SplitN(s, "=", 2)
+		result[kv[0]] = kv[1]
+	}
+	return result, nil
 }
 
 func getConfigFile(filename string) (*composetypes.ConfigFile, error) {
@@ -140,15 +166,15 @@ func validateExternalNetworks(
 	client := dockerCli.Client()
 
 	for _, networkName := range externalNetworks {
-		network, err := client.NetworkInspect(ctx, networkName)
+		network, err := client.NetworkInspect(ctx, networkName, false)
 		if err != nil {
 			if dockerclient.IsErrNetworkNotFound(err) {
-				return fmt.Errorf("network %q is declared as external, but could not be found. You need to create the network before the stack is deployed (with overlay driver)", networkName)
+				return errors.Errorf("network %q is declared as external, but could not be found. You need to create the network before the stack is deployed (with overlay driver)", networkName)
 			}
 			return err
 		}
 		if network.Scope != "swarm" {
-			return fmt.Errorf("network %q is declared as external, but it is not in the right scope: %q instead of %q", networkName, network.Scope, "swarm")
+			return errors.Errorf("network %q is declared as external, but it is not in the right scope: %q instead of %q", networkName, network.Scope, "swarm")
 		}
 	}
 

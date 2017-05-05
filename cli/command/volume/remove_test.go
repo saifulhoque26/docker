@@ -2,12 +2,13 @@ package volume
 
 import (
 	"bytes"
-	"fmt"
 	"io/ioutil"
 	"testing"
 
 	"github.com/docker/docker/cli/internal/test"
-	"github.com/docker/docker/pkg/testutil/assert"
+	"github.com/docker/docker/pkg/testutil"
+	"github.com/pkg/errors"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestVolumeRemoveErrors(t *testing.T) {
@@ -22,7 +23,7 @@ func TestVolumeRemoveErrors(t *testing.T) {
 		{
 			args: []string{"nodeID"},
 			volumeRemoveFunc: func(volumeID string, force bool) error {
-				return fmt.Errorf("error removing the volume")
+				return errors.Errorf("error removing the volume")
 			},
 			expectedError: "error removing the volume",
 		},
@@ -35,7 +36,7 @@ func TestVolumeRemoveErrors(t *testing.T) {
 			}, buf))
 		cmd.SetArgs(tc.args)
 		cmd.SetOutput(ioutil.Discard)
-		assert.Error(t, cmd.Execute(), tc.expectedError)
+		testutil.ErrorContains(t, cmd.Execute(), tc.expectedError)
 	}
 }
 
@@ -43,5 +44,5 @@ func TestNodeRemoveMultiple(t *testing.T) {
 	buf := new(bytes.Buffer)
 	cmd := newRemoveCommand(test.NewFakeCli(&fakeClient{}, buf))
 	cmd.SetArgs([]string{"volume1", "volume2"})
-	assert.NilError(t, cmd.Execute())
+	assert.NoError(t, cmd.Execute())
 }

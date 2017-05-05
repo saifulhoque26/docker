@@ -2,7 +2,6 @@ package volume
 
 import (
 	"bytes"
-	"fmt"
 	"io/ioutil"
 	"strings"
 	"testing"
@@ -10,7 +9,9 @@ import (
 	"github.com/docker/docker/api/types"
 	volumetypes "github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/cli/internal/test"
-	"github.com/docker/docker/pkg/testutil/assert"
+	"github.com/docker/docker/pkg/testutil"
+	"github.com/pkg/errors"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestVolumeCreateErrors(t *testing.T) {
@@ -33,7 +34,7 @@ func TestVolumeCreateErrors(t *testing.T) {
 		},
 		{
 			volumeCreateFunc: func(createBody volumetypes.VolumesCreateBody) (types.Volume, error) {
-				return types.Volume{}, fmt.Errorf("error creating volume")
+				return types.Volume{}, errors.Errorf("error creating volume")
 			},
 			expectedError: "error creating volume",
 		},
@@ -50,7 +51,7 @@ func TestVolumeCreateErrors(t *testing.T) {
 			cmd.Flags().Set(key, value)
 		}
 		cmd.SetOutput(ioutil.Discard)
-		assert.Error(t, cmd.Execute(), tc.expectedError)
+		testutil.ErrorContains(t, cmd.Execute(), tc.expectedError)
 	}
 }
 
@@ -60,7 +61,7 @@ func TestVolumeCreateWithName(t *testing.T) {
 	cli := test.NewFakeCli(&fakeClient{
 		volumeCreateFunc: func(body volumetypes.VolumesCreateBody) (types.Volume, error) {
 			if body.Name != name {
-				return types.Volume{}, fmt.Errorf("expected name %q, got %q", name, body.Name)
+				return types.Volume{}, errors.Errorf("expected name %q, got %q", name, body.Name)
 			}
 			return types.Volume{
 				Name: body.Name,
@@ -71,15 +72,15 @@ func TestVolumeCreateWithName(t *testing.T) {
 	// Test by flags
 	cmd := newCreateCommand(cli)
 	cmd.Flags().Set("name", name)
-	assert.NilError(t, cmd.Execute())
-	assert.Equal(t, strings.TrimSpace(buf.String()), name)
+	assert.NoError(t, cmd.Execute())
+	assert.Equal(t, name, strings.TrimSpace(buf.String()))
 
 	// Then by args
 	buf.Reset()
 	cmd = newCreateCommand(cli)
 	cmd.SetArgs([]string{name})
-	assert.NilError(t, cmd.Execute())
-	assert.Equal(t, strings.TrimSpace(buf.String()), name)
+	assert.NoError(t, cmd.Execute())
+	assert.Equal(t, name, strings.TrimSpace(buf.String()))
 }
 
 func TestVolumeCreateWithFlags(t *testing.T) {
@@ -98,16 +99,16 @@ func TestVolumeCreateWithFlags(t *testing.T) {
 	cli := test.NewFakeCli(&fakeClient{
 		volumeCreateFunc: func(body volumetypes.VolumesCreateBody) (types.Volume, error) {
 			if body.Name != "" {
-				return types.Volume{}, fmt.Errorf("expected empty name, got %q", body.Name)
+				return types.Volume{}, errors.Errorf("expected empty name, got %q", body.Name)
 			}
 			if body.Driver != expectedDriver {
-				return types.Volume{}, fmt.Errorf("expected driver %q, got %q", expectedDriver, body.Driver)
+				return types.Volume{}, errors.Errorf("expected driver %q, got %q", expectedDriver, body.Driver)
 			}
 			if !compareMap(body.DriverOpts, expectedOpts) {
-				return types.Volume{}, fmt.Errorf("expected drivers opts %v, got %v", expectedOpts, body.DriverOpts)
+				return types.Volume{}, errors.Errorf("expected drivers opts %v, got %v", expectedOpts, body.DriverOpts)
 			}
 			if !compareMap(body.Labels, expectedLabels) {
-				return types.Volume{}, fmt.Errorf("expected labels %v, got %v", expectedLabels, body.Labels)
+				return types.Volume{}, errors.Errorf("expected labels %v, got %v", expectedLabels, body.Labels)
 			}
 			return types.Volume{
 				Name: name,
@@ -121,8 +122,8 @@ func TestVolumeCreateWithFlags(t *testing.T) {
 	cmd.Flags().Set("opt", "baz=baz")
 	cmd.Flags().Set("label", "lbl1=v1")
 	cmd.Flags().Set("label", "lbl2=v2")
-	assert.NilError(t, cmd.Execute())
-	assert.Equal(t, strings.TrimSpace(buf.String()), name)
+	assert.NoError(t, cmd.Execute())
+	assert.Equal(t, name, strings.TrimSpace(buf.String()))
 }
 
 func compareMap(actual map[string]string, expected map[string]string) bool {

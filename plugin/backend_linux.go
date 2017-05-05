@@ -24,8 +24,10 @@ import (
 	"github.com/docker/docker/distribution"
 	progressutils "github.com/docker/docker/distribution/utils"
 	"github.com/docker/docker/distribution/xfer"
+	"github.com/docker/docker/dockerversion"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
+	"github.com/docker/docker/pkg/authorization"
 	"github.com/docker/docker/pkg/chrootarchive"
 	"github.com/docker/docker/pkg/mount"
 	"github.com/docker/docker/pkg/pools"
@@ -54,6 +56,19 @@ func (pm *Manager) Disable(refOrID string, config *types.PluginDisableConfig) er
 
 	if !config.ForceDisable && p.GetRefCount() > 0 {
 		return fmt.Errorf("plugin %s is in use", p.Name())
+	}
+
+	for _, typ := range p.GetTypes() {
+		if typ.Capability == authorization.AuthZApiImplements {
+			authzList := pm.config.AuthzMiddleware.GetAuthzPlugins()
+			for i, authPlugin := range authzList {
+				if authPlugin.Name() == p.Name() {
+					// Remove plugin from authzmiddleware chain
+					authzList = append(authzList[:i], authzList[i+1:]...)
+					pm.config.AuthzMiddleware.SetAuthzPlugins(authzList)
+				}
+			}
+		}
 	}
 
 	if err := pm.disable(p, c); err != nil {
@@ -150,6 +165,20 @@ func computePrivileges(c types.PluginConfig) (types.PluginPrivileges, error) {
 			Value:       []string{c.Network.Type},
 		})
 	}
+	if c.IpcHost {
+		privileges = append(privileges, types.PluginPrivilege{
+			Name:        "host ipc namespace",
+			Description: "allow access to host ipc namespace",
+			Value:       []string{"true"},
+		})
+	}
+	if c.PidHost {
+		privileges = append(privileges, types.PluginPrivilege{
+			Name:        "host pid namespace",
+			Description: "allow access to host pid namespace",
+			Value:       []string{"true"},
+		})
+	}
 	for _, mount := range c.Mounts {
 		if mount.Source != nil {
 			privileges = append(privileges, types.PluginPrivilege{
@@ -233,11 +262,9 @@ func (pm *Manager) Upgrade(ctx context.Context, ref reference.Named, name string
 	defer pm.muGC.RUnlock()
 
 	// revalidate because Pull is public
-	nameref, err := reference.ParseNormalizedNamed(name)
-	if err != nil {
+	if _, err := reference.ParseNormalizedNamed(name); err != nil {
 		return errors.Wrapf(err, "failed to parse %q", name)
 	}
-	name = reference.FamiliarString(reference.TagNameOnly(nameref))
 
 	tmpRootFSDir, err := ioutil.TempDir(pm.tmpDir(), ".rootfs")
 	if err != nil {
@@ -619,7 +646,7 @@ func (pm *Manager) Remove(name string, config *types.PluginRmConfig) error {
 func getMounts(root string) ([]string, error) {
 	infos, err := mount.GetMounts()
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to read mount table while performing recursive unmount")
+		return nil, errors.Wrap(err, "failed to read mount table")
 	}
 
 	var mounts []string
@@ -743,6 +770,8 @@ func (pm *Manager) CreateFromContext(ctx context.Context, tarCtx io.ReadCloser, 
 		Type:    "layers",
 		DiffIds: []string{layerDigester.Digest().String()},
 	}
+
+	config.DockerVersion = dockerversion.Version
 
 	configBlob, err := pm.blobStore.New()
 	if err != nil {

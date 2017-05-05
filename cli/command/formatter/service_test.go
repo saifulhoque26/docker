@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/docker/docker/api/types/swarm"
-	"github.com/docker/docker/pkg/testutil/assert"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestServiceContextWrite(t *testing.T) {
@@ -29,9 +29,9 @@ func TestServiceContextWrite(t *testing.T) {
 		// Table format
 		{
 			Context{Format: NewServiceListFormat("table", false)},
-			`ID                  NAME                MODE                REPLICAS            IMAGE
-id_baz              baz                 global              2/4                 
-id_bar              bar                 replicated          2/4                 
+			`ID                  NAME                MODE                REPLICAS            IMAGE               PORTS
+id_baz              baz                 global              2/4                                     *:80->8080/tcp
+id_bar              bar                 replicated          2/4                                     *:80->8080/tcp
 `,
 		},
 		{
@@ -62,12 +62,14 @@ name: baz
 mode: global
 replicas: 2/4
 image: 
+ports: *:80->8080/tcp
 
 id: id_bar
 name: bar
 mode: replicated
 replicas: 2/4
 image: 
+ports: *:80->8080/tcp
 
 `,
 		},
@@ -88,8 +90,38 @@ bar
 
 	for _, testcase := range cases {
 		services := []swarm.Service{
-			{ID: "id_baz", Spec: swarm.ServiceSpec{Annotations: swarm.Annotations{Name: "baz"}}},
-			{ID: "id_bar", Spec: swarm.ServiceSpec{Annotations: swarm.Annotations{Name: "bar"}}},
+			{
+				ID: "id_baz",
+				Spec: swarm.ServiceSpec{
+					Annotations: swarm.Annotations{Name: "baz"},
+					EndpointSpec: &swarm.EndpointSpec{
+						Ports: []swarm.PortConfig{
+							{
+								PublishMode:   "ingress",
+								PublishedPort: 80,
+								TargetPort:    8080,
+								Protocol:      "tcp",
+							},
+						},
+					},
+				},
+			},
+			{
+				ID: "id_bar",
+				Spec: swarm.ServiceSpec{
+					Annotations: swarm.Annotations{Name: "bar"},
+					EndpointSpec: &swarm.EndpointSpec{
+						Ports: []swarm.PortConfig{
+							{
+								PublishMode:   "ingress",
+								PublishedPort: 80,
+								TargetPort:    8080,
+								Protocol:      "tcp",
+							},
+						},
+					},
+				},
+			},
 		}
 		info := map[string]ServiceListInfo{
 			"id_baz": {
@@ -105,17 +137,47 @@ bar
 		testcase.context.Output = out
 		err := ServiceListWrite(testcase.context, services, info)
 		if err != nil {
-			assert.Error(t, err, testcase.expected)
+			assert.EqualError(t, err, testcase.expected)
 		} else {
-			assert.Equal(t, out.String(), testcase.expected)
+			assert.Equal(t, testcase.expected, out.String())
 		}
 	}
 }
 
 func TestServiceContextWriteJSON(t *testing.T) {
 	services := []swarm.Service{
-		{ID: "id_baz", Spec: swarm.ServiceSpec{Annotations: swarm.Annotations{Name: "baz"}}},
-		{ID: "id_bar", Spec: swarm.ServiceSpec{Annotations: swarm.Annotations{Name: "bar"}}},
+		{
+			ID: "id_baz",
+			Spec: swarm.ServiceSpec{
+				Annotations: swarm.Annotations{Name: "baz"},
+				EndpointSpec: &swarm.EndpointSpec{
+					Ports: []swarm.PortConfig{
+						{
+							PublishMode:   "ingress",
+							PublishedPort: 80,
+							TargetPort:    8080,
+							Protocol:      "tcp",
+						},
+					},
+				},
+			},
+		},
+		{
+			ID: "id_bar",
+			Spec: swarm.ServiceSpec{
+				Annotations: swarm.Annotations{Name: "bar"},
+				EndpointSpec: &swarm.EndpointSpec{
+					Ports: []swarm.PortConfig{
+						{
+							PublishMode:   "ingress",
+							PublishedPort: 80,
+							TargetPort:    8080,
+							Protocol:      "tcp",
+						},
+					},
+				},
+			},
+		},
 	}
 	info := map[string]ServiceListInfo{
 		"id_baz": {
@@ -128,8 +190,8 @@ func TestServiceContextWriteJSON(t *testing.T) {
 		},
 	}
 	expectedJSONs := []map[string]interface{}{
-		{"ID": "id_baz", "Name": "baz", "Mode": "global", "Replicas": "2/4", "Image": ""},
-		{"ID": "id_bar", "Name": "bar", "Mode": "replicated", "Replicas": "2/4", "Image": ""},
+		{"ID": "id_baz", "Name": "baz", "Mode": "global", "Replicas": "2/4", "Image": "", "Ports": "*:80->8080/tcp"},
+		{"ID": "id_bar", "Name": "bar", "Mode": "replicated", "Replicas": "2/4", "Image": "", "Ports": "*:80->8080/tcp"},
 	}
 
 	out := bytes.NewBufferString("")
@@ -143,7 +205,7 @@ func TestServiceContextWriteJSON(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &m); err != nil {
 			t.Fatal(err)
 		}
-		assert.DeepEqual(t, m, expectedJSONs[i])
+		assert.Equal(t, expectedJSONs[i], m)
 	}
 }
 func TestServiceContextWriteJSONField(t *testing.T) {
@@ -172,6 +234,6 @@ func TestServiceContextWriteJSONField(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &s); err != nil {
 			t.Fatal(err)
 		}
-		assert.Equal(t, s, services[i].Spec.Name)
+		assert.Equal(t, services[i].Spec.Name, s)
 	}
 }

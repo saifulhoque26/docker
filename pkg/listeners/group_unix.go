@@ -10,6 +10,8 @@ import (
 	"github.com/pkg/errors"
 )
 
+const defaultSocketGroup = "docker"
+
 func lookupGID(name string) (int, error) {
 	groupFile, err := user.GetGroupPath()
 	if err != nil {
@@ -21,7 +23,7 @@ func lookupGID(name string) (int, error) {
 	if err != nil {
 		return -1, errors.Wrapf(err, "error parsing groups for %s", name)
 	}
-	if groups != nil && len(groups) > 0 {
+	if len(groups) > 0 {
 		return groups[0].Gid, nil
 	}
 	gid, err := strconv.Atoi(name)

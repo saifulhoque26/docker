@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"unsafe"
 
 	"github.com/Microsoft/hcsshim"
 	"github.com/Sirupsen/logrus"
@@ -147,6 +146,17 @@ func verifyContainerResources(resources *containertypes.Resources, isHyperv bool
 		return warnings, fmt.Errorf("range of CPUs is from 0.01 to %d.00, as there are only %d CPUs available", sysinfo.NumCPU(), sysinfo.NumCPU())
 	}
 
+	osv := system.GetOSVersion()
+	if resources.NanoCPUs > 0 && isHyperv && osv.Build < 16175 {
+		leftoverNanoCPUs := resources.NanoCPUs % 1e9
+		if leftoverNanoCPUs != 0 && resources.NanoCPUs > 1e9 {
+			resources.NanoCPUs = ((resources.NanoCPUs + 1e9/2) / 1e9) * 1e9
+			warningString := fmt.Sprintf("Your current OS version does not support Hyper-V containers with NanoCPUs greater than 1000000000 but not divisible by 1000000000. NanoCPUs rounded to %d", resources.NanoCPUs)
+			warnings = append(warnings, warningString)
+			logrus.Warn(warningString)
+		}
+	}
+
 	if len(resources.BlkioDeviceReadBps) > 0 {
 		return warnings, fmt.Errorf("invalid option: Windows does not support BlkioDeviceReadBps")
 	}
@@ -245,7 +255,7 @@ func checkSystem() error {
 		return fmt.Errorf("Failed to load vmcompute.dll. Ensure that the Containers role is installed.")
 	}
 
-	return waitOOBEComplete()
+	return nil
 }
 
 // configureKernelSecuritySupport configures and validate security support for the kernel
@@ -615,37 +625,5 @@ func (daemon *Daemon) verifyVolumesInfo(container *container.Container) error {
 }
 
 func (daemon *Daemon) setupSeccompProfile() error {
-	return nil
-}
-
-func waitOOBEComplete() error {
-	kernel32 := windows.NewLazySystemDLL("kernel32.dll")
-	registerWaitUntilOOBECompleted := kernel32.NewProc("RegisterWaitUntilOOBECompleted")
-	unregisterWaitUntilOOBECompleted := kernel32.NewProc("UnregisterWaitUntilOOBECompleted")
-
-	callbackChan := make(chan struct{})
-	callbackFunc := func(uintptr) uintptr {
-		close(callbackChan)
-		return 0
-	}
-	callbackFuncPtr := syscall.NewCallback(callbackFunc)
-
-	var callbackHandle syscall.Handle
-	ret, _, err := registerWaitUntilOOBECompleted.Call(callbackFuncPtr, 0, uintptr(unsafe.Pointer(&callbackHandle)))
-	if ret == 0 {
-		if err == errInvalidState {
-			return nil
-		}
-		return fmt.Errorf("failed to register OOBEComplete callback. Error: %v", err)
-	}
-
-	// Wait for the callback when OOBE is finished
-	<-callbackChan
-
-	ret, _, err = unregisterWaitUntilOOBECompleted.Call(uintptr(callbackHandle))
-	if ret == 0 {
-		return fmt.Errorf("failed to unregister OOBEComplete callback. Error: %v", err)
-	}
-
 	return nil
 }

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/api/types/container"
 	networktypes "github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/strslice"
@@ -18,6 +19,7 @@ import (
 	"github.com/docker/docker/pkg/signal"
 	runconfigopts "github.com/docker/docker/runconfig/opts"
 	"github.com/docker/go-connections/nat"
+	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
 )
 
@@ -30,6 +32,7 @@ type containerOptions struct {
 	attach             opts.ListOpts
 	volumes            opts.ListOpts
 	tmpfs              opts.ListOpts
+	mounts             opts.MountOpt
 	blkioWeightDevice  opts.WeightdeviceOpt
 	deviceReadBps      opts.ThrottledeviceOpt
 	deviceWriteBps     opts.ThrottledeviceOpt
@@ -110,12 +113,11 @@ type containerOptions struct {
 	healthCmd          string
 	healthInterval     time.Duration
 	healthTimeout      time.Duration
+	healthStartPeriod  time.Duration
 	healthRetries      int
 	runtime            string
 	autoRemove         bool
 	init               bool
-	initPath           string
-	credentialSpec     string
 
 	Image string
 	Args  []string
@@ -188,7 +190,6 @@ func addFlags(flags *pflag.FlagSet) *containerOptions {
 	flags.BoolVar(&copts.privileged, "privileged", false, "Give extended privileges to this container")
 	flags.Var(&copts.securityOpt, "security-opt", "Security Options")
 	flags.StringVar(&copts.usernsMode, "userns", "", "User namespace to use")
-	flags.StringVar(&copts.credentialSpec, "credentialspec", "", "Credential spec for managed service account (Windows only)")
 
 	// Network and port publishing flag
 	flags.Var(&copts.extraHosts, "add-host", "Add a custom host-to-IP mapping (host:ip)")
@@ -224,12 +225,15 @@ func addFlags(flags *pflag.FlagSet) *containerOptions {
 	flags.Var(&copts.tmpfs, "tmpfs", "Mount a tmpfs directory")
 	flags.Var(&copts.volumesFrom, "volumes-from", "Mount volumes from the specified container(s)")
 	flags.VarP(&copts.volumes, "volume", "v", "Bind mount a volume")
+	flags.Var(&copts.mounts, "mount", "Attach a filesystem mount to the container")
 
 	// Health-checking
 	flags.StringVar(&copts.healthCmd, "health-cmd", "", "Command to run to check health")
-	flags.DurationVar(&copts.healthInterval, "health-interval", 0, "Time between running the check (ns|us|ms|s|m|h) (default 0s)")
+	flags.DurationVar(&copts.healthInterval, "health-interval", 0, "Time between running the check (ms|s|m|h) (default 0s)")
 	flags.IntVar(&copts.healthRetries, "health-retries", 0, "Consecutive failures needed to report unhealthy")
-	flags.DurationVar(&copts.healthTimeout, "health-timeout", 0, "Maximum time to allow one check to run (ns|us|ms|s|m|h) (default 0s)")
+	flags.DurationVar(&copts.healthTimeout, "health-timeout", 0, "Maximum time to allow one check to run (ms|s|m|h) (default 0s)")
+	flags.DurationVar(&copts.healthStartPeriod, "health-start-period", 0, "Start period for the container to initialize before starting health-retries countdown (ms|s|m|h) (default 0s)")
+	flags.SetAnnotation("health-start-period", "version", []string{"1.29"})
 	flags.BoolVar(&copts.noHealthcheck, "no-healthcheck", false, "Disable any container-specified HEALTHCHECK")
 
 	// Resource management
@@ -239,7 +243,9 @@ func addFlags(flags *pflag.FlagSet) *containerOptions {
 	flags.StringVar(&copts.cpusetCpus, "cpuset-cpus", "", "CPUs in which to allow execution (0-3, 0,1)")
 	flags.StringVar(&copts.cpusetMems, "cpuset-mems", "", "MEMs in which to allow execution (0-3, 0,1)")
 	flags.Int64Var(&copts.cpuCount, "cpu-count", 0, "CPU count (Windows only)")
+	flags.SetAnnotation("cpu-count", "ostype", []string{"windows"})
 	flags.Int64Var(&copts.cpuPercent, "cpu-percent", 0, "CPU percent (Windows only)")
+	flags.SetAnnotation("cpu-percent", "ostype", []string{"windows"})
 	flags.Int64Var(&copts.cpuPeriod, "cpu-period", 0, "Limit CPU CFS (Completely Fair Scheduler) period")
 	flags.Int64Var(&copts.cpuQuota, "cpu-quota", 0, "Limit CPU CFS (Completely Fair Scheduler) quota")
 	flags.Int64Var(&copts.cpuRealtimePeriod, "cpu-rt-period", 0, "Limit CPU real-time period in microseconds")
@@ -254,7 +260,9 @@ func addFlags(flags *pflag.FlagSet) *containerOptions {
 	flags.Var(&copts.deviceWriteBps, "device-write-bps", "Limit write rate (bytes per second) to a device")
 	flags.Var(&copts.deviceWriteIOps, "device-write-iops", "Limit write rate (IO per second) to a device")
 	flags.Var(&copts.ioMaxBandwidth, "io-maxbandwidth", "Maximum IO bandwidth limit for the system drive (Windows only)")
+	flags.SetAnnotation("io-maxbandwidth", "ostype", []string{"windows"})
 	flags.Uint64Var(&copts.ioMaxIOps, "io-maxiops", 0, "Maximum IOps limit for the system drive (Windows only)")
+	flags.SetAnnotation("io-maxiops", "ostype", []string{"windows"})
 	flags.Var(&copts.kernelMemory, "kernel-memory", "Kernel memory limit")
 	flags.VarP(&copts.memory, "memory", "m", "Memory limit")
 	flags.Var(&copts.memoryReservation, "memory-reservation", "Memory soft limit")
@@ -275,15 +283,19 @@ func addFlags(flags *pflag.FlagSet) *containerOptions {
 
 	flags.BoolVar(&copts.init, "init", false, "Run an init inside the container that forwards signals and reaps processes")
 	flags.SetAnnotation("init", "version", []string{"1.25"})
-	flags.StringVar(&copts.initPath, "init-path", "", "Path to the docker-init binary")
-	flags.SetAnnotation("init-path", "version", []string{"1.25"})
 	return copts
+}
+
+type containerConfig struct {
+	Config           *container.Config
+	HostConfig       *container.HostConfig
+	NetworkingConfig *networktypes.NetworkingConfig
 }
 
 // parse parses the args for the specified command and generates a Config,
 // a HostConfig and returns them with the specified command.
 // If the specified args are not valid, it will return an error.
-func parse(flags *pflag.FlagSet, copts *containerOptions) (*container.Config, *container.HostConfig, *networktypes.NetworkingConfig, error) {
+func parse(flags *pflag.FlagSet, copts *containerOptions) (*containerConfig, error) {
 	var (
 		attachStdin  = copts.attach.Get("stdin")
 		attachStdout = copts.attach.Get("stdout")
@@ -293,7 +305,7 @@ func parse(flags *pflag.FlagSet, copts *containerOptions) (*container.Config, *c
 	// Validate the input mac address
 	if copts.macAddress != "" {
 		if _, err := opts.ValidateMACAddress(copts.macAddress); err != nil {
-			return nil, nil, nil, fmt.Errorf("%s is not a valid mac address", copts.macAddress)
+			return nil, errors.Errorf("%s is not a valid mac address", copts.macAddress)
 		}
 	}
 	if copts.stdin {
@@ -309,9 +321,13 @@ func parse(flags *pflag.FlagSet, copts *containerOptions) (*container.Config, *c
 
 	swappiness := copts.swappiness
 	if swappiness != -1 && (swappiness < 0 || swappiness > 100) {
-		return nil, nil, nil, fmt.Errorf("invalid value: %d. Valid memory swappiness range is 0-100", swappiness)
+		return nil, errors.Errorf("invalid value: %d. Valid memory swappiness range is 0-100", swappiness)
 	}
 
+	mounts := copts.mounts.Value()
+	if len(mounts) > 0 && copts.volumeDriver != "" {
+		logrus.Warn("`--volume-driver` is ignored for volumes specified via `--mount`. Use `--mount type=volume,volume-driver=...` instead.")
+	}
 	var binds []string
 	volumes := copts.volumes.GetMap()
 	// add any bind targets to the list of container volumes
@@ -354,13 +370,13 @@ func parse(flags *pflag.FlagSet, copts *containerOptions) (*container.Config, *c
 
 	ports, portBindings, err := nat.ParsePortSpecs(copts.publish.GetAll())
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
 	// Merge in exposed ports to the map of published ports
 	for _, e := range copts.expose.GetAll() {
 		if strings.Contains(e, ":") {
-			return nil, nil, nil, fmt.Errorf("invalid port format for --expose: %s", e)
+			return nil, errors.Errorf("invalid port format for --expose: %s", e)
 		}
 		//support two formats for expose, original format <portnum>/[<proto>] or <startport-endport>/[<proto>]
 		proto, port := nat.SplitProtoPort(e)
@@ -368,12 +384,12 @@ func parse(flags *pflag.FlagSet, copts *containerOptions) (*container.Config, *c
 		//if expose a port, the start and end port are the same
 		start, end, err := nat.ParsePortRange(port)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("invalid range format for --expose: %s, error: %s", e, err)
+			return nil, errors.Errorf("invalid range format for --expose: %s, error: %s", e, err)
 		}
 		for i := start; i <= end; i++ {
 			p, err := nat.NewPort(proto, strconv.FormatUint(i, 10))
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, err
 			}
 			if _, exists := ports[p]; !exists {
 				ports[p] = struct{}{}
@@ -386,7 +402,7 @@ func parse(flags *pflag.FlagSet, copts *containerOptions) (*container.Config, *c
 	for _, device := range copts.devices.GetAll() {
 		deviceMapping, err := parseDevice(device)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, err
 		}
 		deviceMappings = append(deviceMappings, deviceMapping)
 	}
@@ -394,53 +410,53 @@ func parse(flags *pflag.FlagSet, copts *containerOptions) (*container.Config, *c
 	// collect all the environment variables for the container
 	envVariables, err := runconfigopts.ReadKVStrings(copts.envFile.GetAll(), copts.env.GetAll())
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
 	// collect all the labels for the container
 	labels, err := runconfigopts.ReadKVStrings(copts.labelsFile.GetAll(), copts.labels.GetAll())
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
 	ipcMode := container.IpcMode(copts.ipcMode)
 	if !ipcMode.Valid() {
-		return nil, nil, nil, fmt.Errorf("--ipc: invalid IPC mode")
+		return nil, errors.Errorf("--ipc: invalid IPC mode")
 	}
 
 	pidMode := container.PidMode(copts.pidMode)
 	if !pidMode.Valid() {
-		return nil, nil, nil, fmt.Errorf("--pid: invalid PID mode")
+		return nil, errors.Errorf("--pid: invalid PID mode")
 	}
 
 	utsMode := container.UTSMode(copts.utsMode)
 	if !utsMode.Valid() {
-		return nil, nil, nil, fmt.Errorf("--uts: invalid UTS mode")
+		return nil, errors.Errorf("--uts: invalid UTS mode")
 	}
 
 	usernsMode := container.UsernsMode(copts.usernsMode)
 	if !usernsMode.Valid() {
-		return nil, nil, nil, fmt.Errorf("--userns: invalid USER mode")
+		return nil, errors.Errorf("--userns: invalid USER mode")
 	}
 
 	restartPolicy, err := runconfigopts.ParseRestartPolicy(copts.restartPolicy)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
 	loggingOpts, err := parseLoggingOpts(copts.loggingDriver, copts.loggingOpts.GetAll())
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
 	securityOpts, err := parseSecurityOpts(copts.securityOpt.GetAll())
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
 	storageOpts, err := parseStorageOpts(copts.storageOpt.GetAll())
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
 	// Healthcheck
@@ -448,10 +464,11 @@ func parse(flags *pflag.FlagSet, copts *containerOptions) (*container.Config, *c
 	haveHealthSettings := copts.healthCmd != "" ||
 		copts.healthInterval != 0 ||
 		copts.healthTimeout != 0 ||
+		copts.healthStartPeriod != 0 ||
 		copts.healthRetries != 0
 	if copts.noHealthcheck {
 		if haveHealthSettings {
-			return nil, nil, nil, fmt.Errorf("--no-healthcheck conflicts with --health-* options")
+			return nil, errors.Errorf("--no-healthcheck conflicts with --health-* options")
 		}
 		test := strslice.StrSlice{"NONE"}
 		healthConfig = &container.HealthConfig{Test: test}
@@ -462,20 +479,24 @@ func parse(flags *pflag.FlagSet, copts *containerOptions) (*container.Config, *c
 			probe = strslice.StrSlice(args)
 		}
 		if copts.healthInterval < 0 {
-			return nil, nil, nil, fmt.Errorf("--health-interval cannot be negative")
+			return nil, errors.Errorf("--health-interval cannot be negative")
 		}
 		if copts.healthTimeout < 0 {
-			return nil, nil, nil, fmt.Errorf("--health-timeout cannot be negative")
+			return nil, errors.Errorf("--health-timeout cannot be negative")
 		}
 		if copts.healthRetries < 0 {
-			return nil, nil, nil, fmt.Errorf("--health-retries cannot be negative")
+			return nil, errors.Errorf("--health-retries cannot be negative")
+		}
+		if copts.healthStartPeriod < 0 {
+			return nil, fmt.Errorf("--health-start-period cannot be negative")
 		}
 
 		healthConfig = &container.HealthConfig{
-			Test:     probe,
-			Interval: copts.healthInterval,
-			Timeout:  copts.healthTimeout,
-			Retries:  copts.healthRetries,
+			Test:        probe,
+			Interval:    copts.healthInterval,
+			Timeout:     copts.healthTimeout,
+			StartPeriod: copts.healthStartPeriod,
+			Retries:     copts.healthRetries,
 		}
 	}
 
@@ -580,10 +601,11 @@ func parse(flags *pflag.FlagSet, copts *containerOptions) (*container.Config, *c
 		Tmpfs:          tmpfs,
 		Sysctls:        copts.sysctls.GetAll(),
 		Runtime:        copts.runtime,
+		Mounts:         mounts,
 	}
 
 	if copts.autoRemove && !hostConfig.RestartPolicy.IsNone() {
-		return nil, nil, nil, fmt.Errorf("Conflicting options: --restart and --rm")
+		return nil, errors.Errorf("Conflicting options: --restart and --rm")
 	}
 
 	// only set this value if the user provided the flag, else it should default to nil
@@ -635,13 +657,17 @@ func parse(flags *pflag.FlagSet, copts *containerOptions) (*container.Config, *c
 		networkingConfig.EndpointsConfig[string(hostConfig.NetworkMode)] = epConfig
 	}
 
-	return config, hostConfig, networkingConfig, nil
+	return &containerConfig{
+		Config:           config,
+		HostConfig:       hostConfig,
+		NetworkingConfig: networkingConfig,
+	}, nil
 }
 
 func parseLoggingOpts(loggingDriver string, loggingOpts []string) (map[string]string, error) {
 	loggingOptsMap := runconfigopts.ConvertKVStringsToMap(loggingOpts)
 	if loggingDriver == "none" && len(loggingOpts) > 0 {
-		return map[string]string{}, fmt.Errorf("invalid logging opts for driver %s", loggingDriver)
+		return map[string]string{}, errors.Errorf("invalid logging opts for driver %s", loggingDriver)
 	}
 	return loggingOptsMap, nil
 }
@@ -654,17 +680,17 @@ func parseSecurityOpts(securityOpts []string) ([]string, error) {
 			if strings.Contains(opt, ":") {
 				con = strings.SplitN(opt, ":", 2)
 			} else {
-				return securityOpts, fmt.Errorf("Invalid --security-opt: %q", opt)
+				return securityOpts, errors.Errorf("Invalid --security-opt: %q", opt)
 			}
 		}
 		if con[0] == "seccomp" && con[1] != "unconfined" {
 			f, err := ioutil.ReadFile(con[1])
 			if err != nil {
-				return securityOpts, fmt.Errorf("opening seccomp profile (%s) failed: %v", con[1], err)
+				return securityOpts, errors.Errorf("opening seccomp profile (%s) failed: %v", con[1], err)
 			}
 			b := bytes.NewBuffer(nil)
 			if err := json.Compact(b, f); err != nil {
-				return securityOpts, fmt.Errorf("compacting json for seccomp profile (%s) failed: %v", con[1], err)
+				return securityOpts, errors.Errorf("compacting json for seccomp profile (%s) failed: %v", con[1], err)
 			}
 			securityOpts[key] = fmt.Sprintf("seccomp=%s", b.Bytes())
 		}
@@ -681,7 +707,7 @@ func parseStorageOpts(storageOpts []string) (map[string]string, error) {
 			opt := strings.SplitN(option, "=", 2)
 			m[opt[0]] = opt[1]
 		} else {
-			return nil, fmt.Errorf("invalid storage option")
+			return nil, errors.Errorf("invalid storage option")
 		}
 	}
 	return m, nil
@@ -707,7 +733,7 @@ func parseDevice(device string) (container.DeviceMapping, error) {
 	case 1:
 		src = arr[0]
 	default:
-		return container.DeviceMapping{}, fmt.Errorf("invalid device specification: %s", device)
+		return container.DeviceMapping{}, errors.Errorf("invalid device specification: %s", device)
 	}
 
 	if dst == "" {
@@ -730,7 +756,7 @@ func validateDeviceCgroupRule(val string) (string, error) {
 		return val, nil
 	}
 
-	return val, fmt.Errorf("invalid device cgroup format '%s'", val)
+	return val, errors.Errorf("invalid device cgroup format '%s'", val)
 }
 
 // validDeviceMode checks if the mode for device is valid or not.
@@ -766,12 +792,12 @@ func validatePath(val string, validator func(string) bool) (string, error) {
 	var mode string
 
 	if strings.Count(val, ":") > 2 {
-		return val, fmt.Errorf("bad format for path: %s", val)
+		return val, errors.Errorf("bad format for path: %s", val)
 	}
 
 	split := strings.SplitN(val, ":", 3)
 	if split[0] == "" {
-		return val, fmt.Errorf("bad format for path: %s", val)
+		return val, errors.Errorf("bad format for path: %s", val)
 	}
 	switch len(split) {
 	case 1:
@@ -790,13 +816,13 @@ func validatePath(val string, validator func(string) bool) (string, error) {
 		containerPath = split[1]
 		mode = split[2]
 		if isValid := validator(split[2]); !isValid {
-			return val, fmt.Errorf("bad mode specified: %s", mode)
+			return val, errors.Errorf("bad mode specified: %s", mode)
 		}
 		val = fmt.Sprintf("%s:%s:%s", split[0], containerPath, mode)
 	}
 
 	if !path.IsAbs(containerPath) {
-		return val, fmt.Errorf("%s is not an absolute path", containerPath)
+		return val, errors.Errorf("%s is not an absolute path", containerPath)
 	}
 	return val, nil
 }
@@ -870,5 +896,5 @@ func validateAttach(val string) (string, error) {
 			return s, nil
 		}
 	}
-	return val, fmt.Errorf("valid streams are STDIN, STDOUT and STDERR")
+	return val, errors.Errorf("valid streams are STDIN, STDOUT and STDERR")
 }

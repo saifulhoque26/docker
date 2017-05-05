@@ -17,13 +17,13 @@ export DOCKER_GITCOMMIT
 # to allow things like `make KEEPBUNDLE=1 binary` easily
 # `project/PACKAGERS.md` have some limited documentation of some of these
 DOCKER_ENVS := \
+	$(if $(DOCKER_CROSSPLATFORMS), -e DOCKER_CROSSPLATFORMS) \
 	-e BUILD_APT_MIRROR \
 	-e BUILDFLAGS \
 	-e KEEPBUNDLE \
 	-e DOCKER_BUILD_ARGS \
 	-e DOCKER_BUILD_GOGC \
 	-e DOCKER_BUILD_PKGS \
-	-e DOCKER_CROSSPLATFORMS \
 	-e DOCKER_DEBUG \
 	-e DOCKER_EXPERIMENTAL \
 	-e DOCKER_GITCOMMIT \
@@ -140,6 +140,9 @@ run: build ## run the docker daemon in a container
 
 shell: build ## start a shell inside the build env
 	$(DOCKER_RUN_DOCKER) bash
+
+yaml-docs-gen: build ## generate documentation YAML files consumed by docs repo
+	$(DOCKER_RUN_DOCKER) sh -c 'hack/make.sh yaml-docs-generator && ( root=$$(pwd); cd bundles/latest/yaml-docs-generator; mkdir docs; ./yaml-docs-generator --root $${root} --target $$(pwd)/docs )'
 
 test: build ## run the unit, integration and docker-py tests
 	$(DOCKER_RUN_DOCKER) hack/make.sh dynbinary cross test-unit test-integration-cli test-docker-py

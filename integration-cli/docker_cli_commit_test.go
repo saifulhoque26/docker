@@ -4,21 +4,22 @@ import (
 	"strings"
 
 	"github.com/docker/docker/integration-cli/checker"
+	"github.com/docker/docker/integration-cli/cli"
 	"github.com/go-check/check"
 )
 
 func (s *DockerSuite) TestCommitAfterContainerIsDone(c *check.C) {
-	out, _ := dockerCmd(c, "run", "-i", "-a", "stdin", "busybox", "echo", "foo")
+	out := cli.DockerCmd(c, "run", "-i", "-a", "stdin", "busybox", "echo", "foo").Combined()
 
 	cleanedContainerID := strings.TrimSpace(out)
 
-	dockerCmd(c, "wait", cleanedContainerID)
+	cli.DockerCmd(c, "wait", cleanedContainerID)
 
-	out, _ = dockerCmd(c, "commit", cleanedContainerID)
+	out = cli.DockerCmd(c, "commit", cleanedContainerID).Combined()
 
 	cleanedImageID := strings.TrimSpace(out)
 
-	dockerCmd(c, "inspect", cleanedImageID)
+	cli.DockerCmd(c, "inspect", cleanedImageID)
 }
 
 func (s *DockerSuite) TestCommitWithoutPause(c *check.C) {
@@ -39,7 +40,6 @@ func (s *DockerSuite) TestCommitWithoutPause(c *check.C) {
 //test commit a paused container should not unpause it after commit
 func (s *DockerSuite) TestCommitPausedContainer(c *check.C) {
 	testRequires(c, DaemonIsLinux)
-	defer unpauseAllContainers(c)
 	out, _ := dockerCmd(c, "run", "-i", "-d", "busybox")
 
 	cleanedContainerID := strings.TrimSpace(out)

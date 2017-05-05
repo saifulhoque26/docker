@@ -88,25 +88,30 @@ func (pm *Manager) pluginPostStart(p *v2.Plugin, c *controller) error {
 
 	p.SetPClient(client)
 
+	// Initial sleep before net Dial to allow plugin to listen on socket.
+	time.Sleep(500 * time.Millisecond)
 	maxRetries := 3
 	var retries int
 	for {
-		time.Sleep(3 * time.Second)
-		retries++
-
-		if retries > maxRetries {
-			logrus.Debugf("error net dialing plugin: %v", err)
-			c.restart = false
-			shutdownPlugin(p, c, pm.containerdClient)
-			return err
-		}
-
 		// net dial into the unix socket to see if someone's listening.
 		conn, err := net.Dial("unix", sockAddr)
 		if err == nil {
 			conn.Close()
 			break
 		}
+
+		time.Sleep(3 * time.Second)
+		retries++
+
+		if retries > maxRetries {
+			logrus.Debugf("error net dialing plugin: %v", err)
+			c.restart = false
+			// While restoring plugins, we need to explicitly set the state to disabled
+			pm.config.Store.SetState(p, false)
+			shutdownPlugin(p, c, pm.containerdClient)
+			return err
+		}
+
 	}
 	pm.config.Store.SetState(p, true)
 	pm.config.Store.CallHandler(p)
@@ -194,9 +199,17 @@ func (pm *Manager) upgradePlugin(p *v2.Plugin, configDigest digest.Digest, blobs
 
 	pdir := filepath.Join(pm.config.Root, p.PluginObj.ID)
 	orig := filepath.Join(pdir, "rootfs")
+
+	// Make sure nothing is mounted
+	// This could happen if the plugin was disabled with `-f` with active mounts.
+	// If there is anything in `orig` is still mounted, this should error out.
+	if err := recursiveUnmount(orig); err != nil {
+		return err
+	}
+
 	backup := orig + "-old"
 	if err := os.Rename(orig, backup); err != nil {
-		return err
+		return errors.Wrap(err, "error backing up plugin data before upgrade")
 	}
 
 	defer func() {
@@ -205,9 +218,8 @@ func (pm *Manager) upgradePlugin(p *v2.Plugin, configDigest digest.Digest, blobs
 				logrus.WithError(rmErr).WithField("dir", backup).Error("error cleaning up after failed upgrade")
 				return
 			}
-
-			if err := os.Rename(backup, orig); err != nil {
-				err = errors.Wrap(err, "error restoring old plugin root on upgrade failure")
+			if mvErr := os.Rename(backup, orig); mvErr != nil {
+				err = errors.Wrap(mvErr, "error restoring old plugin root on upgrade failure")
 			}
 			if rmErr := os.RemoveAll(tmpRootFSDir); rmErr != nil && !os.IsNotExist(rmErr) {
 				logrus.WithError(rmErr).WithField("plugin", p.Name()).Errorf("error cleaning up plugin upgrade dir: %s", tmpRootFSDir)
